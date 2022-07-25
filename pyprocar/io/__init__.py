@@ -10,6 +10,7 @@ from .elkparser import ElkParser
 from .qeparser import QEParser, QEDOSParser, QEFermiParser
 from .lobsterparser import LobsterParser, LobsterDOSParser, LobsterFermiParser
 from .vaspxml import VaspXML
+from .abacus import ABACUSParser
 # from . import vaspxml
 
 # TODO remove the directories abinitparser
