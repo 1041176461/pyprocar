@@ -3,6 +3,7 @@ __maintainer__ = "Yuyang Ji"
 __email__ = "jiyuyang@mail.ustc.edu.cn"
 __date__ = "July 22, 2022"
 
+
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -16,17 +17,11 @@ BOHR_TO_A = physical_constants["atomic unit of length"][0] / \
     physical_constants["Angstrom star"][0]
 
 class ABACUSParser:
-    def __init__(self, pdos_file='PDOS', k_file='KLINES', running_file='running_scf.log', dos_interpolation_factor=None):
+    def __init__(self, pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', running_file='running_scf.log', dos_interpolation_factor=None):
 
         self.dos_interpolation_factor = dos_interpolation_factor
 
-        self.pdos_file = self.check_file(pdos_file)
-        self.k_file = self.check_file(k_file)
-        self.running_file = self.check_file(running_file)
-
-        self._read()
-
-        self._nsplit = self.nspin if self.nspin == 2 else 1
+        self.read(pdos_file, pband_file, k_file, running_file)
 
         if self.nspin in [1, 4]:
             self.is_spin_polarized = False
@@ -45,31 +40,48 @@ class ABACUSParser:
 
 ## READ FILES
 
-    def _read(self):
-        self._readABACUSout()
-        self._readKLINES()
-        self._readPDOS()
+    def read(self, pdos_file, pband_file, k_file, running_file):
+        if isinstance(pband_file, str):
+            pband_file = [pband_file]
+        self.pband_file = []
+        for file in pband_file:
+            if self.check_file(file):
+                self.pband_file.append(file)
+        self.pdos_file = self.check_file(pdos_file)
+        self.k_file = self.check_file(k_file)
+        self.running_file = self.check_file(running_file)
+
+        if self.running_file:
+            self._readABACUSout()
+        if self.k_file:
+            self._readKLINES()
+        if self.pdos_file:
+            self._readPDOS()
+        if self.pband_file:
+            self._readPBANDS()
 
     @staticmethod
     def check_file(filename):
-        if not os.path.isfile(filename):
-            raise ValueError(f'File {filename} not found ')
-        else:
+        if os.path.isfile(filename):
             return filename
+        else:
+            return None
 
     def _readPDOS(self):
         """Read partial DOS data file"""
 
+        self.dos_data = dict()
         pdosdata = ET.parse(self.pdos_file)
         root = pdosdata.getroot()
         self.nspin = int(root.findall('.//nspin')[0].text.replace(' ', ''))
+        self._nsplit = self.nspin if self.nspin == 2 else 1
         norbitals = int(root.findall('.//norbitals')[0].text.replace(' ', ''))
-        self.eunit = root.findall(
+        self.dos_data['eunit'] = root.findall(
             './/energy_values')[0].attrib['units'].replace(' ', '')
         e_list = root.findall(
             './/energy_values')[0].text.replace(' ', '').split('\n')
         remove_empty(e_list)
-        self.state = []
+        state = []
         for i in range(norbitals):
             orb = OrderedDict()
             orb['atom_index'] = int(root.findall(
@@ -86,8 +98,52 @@ class ABACUSParser:
             data = handle_data(data)
             remove_empty(data)
             orb['data'] = np.array(data, dtype=float)
-            self.state.append(orb)
-        self.energies = np.array(e_list).astype(float)
+            state.append(orb)
+        self.dos_data['energies'] = np.array(e_list).astype(float)
+        self.dos_data['state'] = state
+
+    def _readPBANDS(self):
+        """Read partial DOS data file"""
+
+        self.band_data = []
+        for file in self.pband_file:
+            band = dict()
+            pbanddata = ET.parse(file)
+            root = pbanddata.getroot()
+            self.nspin = int(root.findall('.//nspin')[0].text.replace(' ', ''))
+            self._nsplit = self.nspin if self.nspin == 2 else 1
+            assert len(self.pband_file) == self._nsplit, f'{self._nsplit} projected band files should be read, only {len(self.pband_file)} provided here'
+            norbitals = int(root.findall('.//norbitals')[0].text.replace(' ', ''))
+            band['eunit'] = root.findall(
+            './/band_structure')[0].attrib['units'].replace(' ', '')
+            band['nbands'] = root.findall(
+            './/band_structure')[0].attrib['nbands'].replace(' ', '')
+            band['nkpoints'] = root.findall(
+            './/band_structure')[0].attrib['nkpoints'].replace(' ', '')
+            energy = root.findall('.//band_structure')[0].text.split('\n')
+            energy = handle_data(energy)
+            remove_empty(energy)
+            band['band_structure'] = np.array(energy, dtype=float)
+            state = []
+            for i in range(norbitals):
+                orb = OrderedDict()
+                orb['atom_index'] = int(root.findall(
+                    './/orbital')[i].attrib['atom_index'].replace(' ', ''))
+                orb['species'] = root.findall(
+                    './/orbital')[i].attrib['species'].replace(' ', '')
+                orb['l'] = int(root.findall('.//orbital')
+                            [i].attrib['l'].replace(' ', ''))
+                orb['m'] = int(root.findall('.//orbital')
+                            [i].attrib['m'].replace(' ', ''))
+                orb['z'] = int(root.findall('.//orbital')
+                            [i].attrib['z'].replace(' ', ''))
+                data = root.findall('.//data')[i].text.split('\n')
+                data = handle_data(data)
+                remove_empty(data)
+                orb['data'] = np.array(data, dtype=float)
+                state.append(orb)
+            band['state'] = state
+            self.band_data.append(band)
 
     def _readKLINES(self):
         """Read KLINES file"""
@@ -132,15 +188,12 @@ class ABACUSParser:
                         has_time_reversal=has_time_reversal,
                     )
 
-
     def _readABACUSout(self):
         """Read running_*.log file"""
 
         re_float = r'[\d\.\-\+Ee]+'
 
-        # Structures
         def str_to_sites(val_in):
-            data = dict()
             val = np.array(val_in)
             labels = val[:, 0]
             pos = val[:, 1:4].astype(float)
@@ -156,8 +209,21 @@ class ABACUSParser:
             steps.insert(0, 0)
             return steps
 
+        def str_to_kpoints(val_in):
+            lines = re.search(
+                rf'KPOINTS\s*DIRECT_X\s*DIRECT_Y\s*DIRECT_Z\s*WEIGHT([\s\S]+?)DONE', val_in).group(1).strip().split('\n')
+            data = []
+            for line in lines:
+                data.append(line.strip().split()[1:5])
+            kpoints, weights, _ = np.split(
+                np.array(data, dtype=float), [3, 4], axis=1)
+            return kpoints, weights.flatten()
+
         with open(self.running_file, 'r') as fd:
             contents = fd.read()
+
+        self.nspin = int(re.search(r'nspin\s*=\s*(\d+)', contents).group(1))
+        self._nsplit = self.nspin if self.nspin == 2 else 1
 
         # cells
         a0_pattern = re.compile(
@@ -220,7 +286,19 @@ class ABACUSParser:
             self.zetas[label] = list(map(int, zeta_pattern.findall(data)))
             len_zetas.append(len(self.zetas[label]))
         self._max_L = np.max(len_zetas)
-        self._max_M = 2*(self._max_L-1)+1
+        self._M_list = []
+        for hl in len_zetas:
+            m = []
+            for l in range(hl):
+                m.append(2*l+1)
+            self._M_list.append(m)
+        self._max_M_list = list(map(np.sum, self.M_list))
+        self._max_M = np.max(self._max_M_list)
+
+        # kpoints
+        k_pattern = re.compile(r'minimum distributed K point number\s*=\s*\d+([\s\S]+?DONE : INIT K-POINTS Time)')
+        sub_contents = k_pattern.search(contents).group(1)
+        self.kpoints, self.weigths = str_to_kpoints(sub_contents)
 
 # STRUCTURE
 
@@ -271,6 +349,11 @@ class ABACUSParser:
 
         return self.structures[-1]
 
+    @property
+    def reciprocal_lattice(self):
+        """reciprocal_lattice of the last step"""
+        return self.structure.reciprocal_lattice
+
 ## BAND STRUCTURE
 
     @property
@@ -285,9 +368,9 @@ class ABACUSParser:
 
     def _get_dos_total(self):
 
-        dos_total = {'energies': self.energies}
-        res = np.zeros_like(self.state[0]["data"], dtype=float)
-        for orb in self.state:
+        dos_total = {'energies': self.dos_data['energies']}
+        res = np.zeros_like(self.dos_data['state'][0]["data"], dtype=float)
+        for orb in self.dos_data['state']:
             res = res + orb['data']
 
         if self.is_spin_polarized:
@@ -299,11 +382,11 @@ class ABACUSParser:
         return dos_total, list(dos_total.keys())
 
     def _get_dos_projected(self):
-        """dos_projected[name][l_index][m_index].shape == (obj._nsplit, len(obj.energies))"""
+        """dos_projected[name][l_index][m_index].shape == (obj._nsplit, len(obj.dos_data['energies']))"""
 
         dos_projected = dict()
-        res = np.zeros((len(self.energies), self._nsplit))
-        for orb in self.state:
+        res = np.zeros((len(self.dos_data['energies']), self._nsplit))
+        for orb in self.dos_data['state']:
             elem = orb['species']
             name = elem+str(orb['atom_index']-1)
             l_index = orb['l']
@@ -313,9 +396,9 @@ class ABACUSParser:
             if z_index <= zs:
                 res += orb['data']
             if z_index == zs:
-                dos_projected[name] = {'energies': self.energies}
+                dos_projected[name] = {'energies': self.dos_data['energies']}
                 dos_projected[name][l_index] = {m_index: res.T}
-                res = np.zeros((len(self.energies), self._nsplit))
+                res = np.zeros((len(self.dos_data['energies']), self._nsplit))
 
         return dos_projected, ['energies']+self.orbital_name[:self._max_M]
 
@@ -363,14 +446,15 @@ class ABACUSParser:
         dos_projected, info = self._get_dos_projected()
         if dos_projected is None:
             return None
-        ret = np.zeros((self.initial_structure.natoms, self._max_L, self._max_M, self._nsplit, len(self.energies)), dtype=float)
-        for i_atom, atom_key in enumerate(dos_projected):
-            for i_principal in range(self._max_L):
-                for i_orbital in range(self._max_M):
-                    if i_principal not in dos_projected[atom_key].keys() or i_orbital not in dos_projected[atom_key][i_principal].keys():
-                        ret[i_atom][i_principal][i_orbital] = np.zeros((self._nsplit, len(self.energies)), dtype=float)
-                    else:
-                        ret[i_atom][i_principal][i_orbital] = dos_projected[atom_key][i_principal][i_orbital]
+        ret = np.zeros((self.initial_structure.natoms, self._max_L+1, self._max_M, self._nsplit, len(self.dos_data['energies'])), dtype=float)
+        #for i_atom, atom_key in enumerate(dos_projected):
+            # for i_principal in range(self._max_L):
+            #     for i_orbital in range(self._max_M):
+            #         if i_principal not in dos_projected[atom_key].keys() or i_orbital not in dos_projected[atom_key][i_principal].keys():
+            #             ret[i_atom][i_principal][i_orbital] = np.zeros((self._nsplit, len(self.dos_data['energies'])), dtype=float)
+            #         else:
+            #             ret[i_atom][i_principal][i_orbital] = dos_projected[atom_key][i_principal][i_orbital]
+            # ret[i_atom][self._max_L][0] = self.dos_total
         
         return ret
 
@@ -398,6 +482,7 @@ def handle_data(data):
 if __name__ == '__main__':
     running_file = r'C:\Users\YY.Ji\Desktop\running_scf.log'
     pdos_file = r'C:\Users\YY.Ji\Desktop\PDOS'
+    pbands_file = ''
     k_file = r'C:\Users\YY.Ji\Desktop\KPT'
-    obj = ABACUSParser(pdos_file, k_file, running_file)
-    print(obj.kpath)
+    obj = ABACUSParser(pdos_file, pbands_file, k_file, running_file)
+    print(obj.max_M_list)
