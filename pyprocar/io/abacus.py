@@ -500,7 +500,7 @@ class ABACUSParser:
 
         dos, labels = self._get_dos_total()
         total = []
-        for ispin in self.dos_total:
+        for ispin in dos:
             if ispin == 'energies':
                 continue
             total.append(dos[ispin]) # (nspin, ndos)
