@@ -7,7 +7,7 @@ __date__ = "July 22, 2022"
 import os
 import re
 import xml.etree.ElementTree as ET
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 import numpy as np
 from scipy.constants import physical_constants
 
@@ -37,6 +37,22 @@ class ABACUSParser:
             'g_z^4', 'g_xz^3', 'g_yz^3', 'g_xyz^2', 'g_z^2(x^2-y^2)',
             'g_x^3z', 'g_y^3z', 'g_x^4+y^4', 'g_xy(x^2-y^2)',
         ]
+
+    def orbitals(self, L):
+        l_list = [i for i in range(L)]
+        m_list = [[j for j in range(2*i+1)] for i in range(L)]
+
+        return dict(zip(l_list, m_list))
+
+    @property
+    def projected_labels(self):
+        projected_labels = dict()
+        for i, label in enumerate(self.labels):
+            L = len(self.zetas[label])
+            projected_labels[i+1] = self.orbitals(L)
+
+        return projected_labels
+
 
 ## READ FILES
 
@@ -116,10 +132,10 @@ class ABACUSParser:
             norbitals = int(root.findall('.//norbitals')[0].text.replace(' ', ''))
             band['eunit'] = root.findall(
             './/band_structure')[0].attrib['units'].replace(' ', '')
-            band['nbands'] = root.findall(
-            './/band_structure')[0].attrib['nbands'].replace(' ', '')
-            band['nkpoints'] = root.findall(
-            './/band_structure')[0].attrib['nkpoints'].replace(' ', '')
+            self.nbands = int(root.findall(
+            './/band_structure')[0].attrib['nbands'].replace(' ', ''))
+            self.nkpoints = int(root.findall(
+            './/band_structure')[0].attrib['nkpoints'].replace(' ', ''))
             energy = root.findall('.//band_structure')[0].text.split('\n')
             energy = handle_data(energy)
             remove_empty(energy)
@@ -286,14 +302,15 @@ class ABACUSParser:
             self.zetas[label] = list(map(int, zeta_pattern.findall(data)))
             len_zetas.append(len(self.zetas[label]))
         self._max_L = np.max(len_zetas)
-        self._M_list = []
+        _M_list = []
         for hl in len_zetas:
             m = []
             for l in range(hl):
                 m.append(2*l+1)
-            self._M_list.append(m)
-        self._max_M_list = list(map(np.sum, self.M_list))
-        self._max_M = np.max(self._max_M_list)
+            _M_list.append(m)
+        self._M_dict = dict(zip(self.zetas.keys(), _M_list))
+        self._max_M_dict = dict(zip(self.zetas.keys(), list(map(np.cumsum, _M_list))))
+        self._max_M = np.max(list(map(np.sum, _M_list)))
 
         # kpoints
         k_pattern = re.compile(r'minimum distributed K point number\s*=\s*\d+([\s\S]+?DONE : INIT K-POINTS Time)')
@@ -364,6 +381,68 @@ class ABACUSParser:
 
         return self._fermi
 
+    @property
+    def bands(self):
+        data = np.zeros(shape=(self.nkpoints, self.nbands, self._nsplit))
+        for ispin, band in enumerate(self.band_data):
+            data[:,:,ispin] = band['band_structure']
+
+        return data
+
+    def _get_weights(self):
+        
+        weights = []
+        keyname = 'atom_index'
+        for band in self.band_data:
+            weight, totnum = parse_projected_data(band['state'], self.projected_labels, keyname)
+            weights.append(weight)
+
+        return weights, self.orbital_name[:self._max_M]
+
+    @property
+    def weight_atom_projected(self):
+        keyname = 'atom_index'
+        atom_index = np.array([i for i in range(self.initial_structure.natoms)])+1
+        weights = []
+        for band in self.band_data:
+            weight, totnum = parse_projected_data(band['state'], atom_index, keyname)
+            weights.append(weight)
+
+        return weights
+
+    @property
+    def weights_projected(self):
+        _weights, info = self._get_weights()
+        if _weights is None:
+            return None
+        ret = np.zeros((self.nkpoints, self.nbands, self.initial_structure.natoms, self._max_L+1, self._max_M, self._nsplit))
+        for ispin, weight in enumerate(_weights):
+            for i_atom in weight.keys():
+                atom_key = self.labels[i_atom-1]
+                for l in range(len(self._M_dict[atom_key])):
+                    for m in range(self._M_dict[atom_key][l]):
+                        if l == 0:
+                            ret[:, :, i_atom-1, l, m, ispin]= weight[i_atom][l][m]
+                        else:                     
+                            ret[:, :, i_atom-1, l, m+self._max_M_dict[atom_key][l-1], ispin] = weight[i_atom][l][m]
+                ret[:, :, i_atom-1, -1, 0, ispin] = self.weight_atom_projected[ispin][i_atom]
+        
+        return ret
+
+    @property
+    def ebs(self):
+        return ElectronicBandStructure(
+            kpoints=self.kpoints,
+            bands=self.bands,
+            projected=self.weights_projected,
+            efermi=self.fermi,
+            kpath=self.kpath,
+            labels=self.orbital_name,
+            reciprocal_lattice=self.reciprocal_lattice,
+            interpolation_factor=self.dos_interpolation_factor,
+        )
+
+
 ## DOS
 
     def _get_dos_total(self):
@@ -382,37 +461,18 @@ class ABACUSParser:
         return dos_total, list(dos_total.keys())
 
     def _get_dos_projected(self):
-        """dos_projected[name][l_index][m_index].shape == (obj._nsplit, len(obj.dos_data['energies']))"""
 
-        dos_projected = dict()
-        res = np.zeros((len(self.dos_data['energies']), self._nsplit))
-        for orb in self.dos_data['state']:
-            elem = orb['species']
-            name = elem+str(orb['atom_index']-1)
-            l_index = orb['l']
-            m_index = orb['m']
-            z_index = orb['z']
-            zs = self.zetas[elem][l_index]
-            if z_index <= zs:
-                res += orb['data']
-            if z_index == zs:
-                dos_projected[name] = {'energies': self.dos_data['energies']}
-                dos_projected[name][l_index] = {m_index: res.T}
-                res = np.zeros((len(self.dos_data['energies']), self._nsplit))
-
-        return dos_projected, ['energies']+self.orbital_name[:self._max_M]
+        keyname = 'atom_index'
+        dos_projected, totnum = parse_projected_data(self.dos_data['state'], self.projected_labels, keyname)
+        #[nspin][ndos]
+        return dos_projected, self.orbital_name[:self._max_M]
 
     @property
     def dos(self):
-        energies = self.dos_total['energies'] - self.fermi
-        total = []
-        for ispin in self.dos_total:
-            if ispin == 'energies':
-                continue
-            total.append(self.dos_total[ispin])
+        energies = self.dos_data['energies'] - self.fermi
         return DensityOfStates(
             energies=energies,
-            total=total,
+            total=self.dos_total,
             projected=self.dos_projected,
             interpolation_factor=self.dos_interpolation_factor)
 
@@ -428,13 +488,22 @@ class ABACUSParser:
 
     @property
     def dos_total(self):
-        """
-        Returns the total density of states as a pychemia.visual.DensityOfSates object
-        """
 
         dos_total, labels = self._get_dos_total()
+        total = []
+        for ispin in self.dos_total:
+            if ispin == 'energies':
+                continue
+            total.append(dos_total[ispin]) # (nspin, ndos)
 
-        return dos_total
+        return total
+
+    @property
+    def dos_atom_projected(self):
+        keyname = 'atom_index'
+        atom_index = np.array([i for i in range(self.initial_structure.natoms)])+1
+
+        return parse_projected_data(self.dos_data['state'], atom_index, keyname)[0]
 
     @property
     def dos_projected(self):
@@ -447,15 +516,15 @@ class ABACUSParser:
         if dos_projected is None:
             return None
         ret = np.zeros((self.initial_structure.natoms, self._max_L+1, self._max_M, self._nsplit, len(self.dos_data['energies'])), dtype=float)
-        #for i_atom, atom_key in enumerate(dos_projected):
-            # for i_principal in range(self._max_L):
-            #     for i_orbital in range(self._max_M):
-            #         if i_principal not in dos_projected[atom_key].keys() or i_orbital not in dos_projected[atom_key][i_principal].keys():
-            #             ret[i_atom][i_principal][i_orbital] = np.zeros((self._nsplit, len(self.dos_data['energies'])), dtype=float)
-            #         else:
-            #             ret[i_atom][i_principal][i_orbital] = dos_projected[atom_key][i_principal][i_orbital]
-            # ret[i_atom][self._max_L][0] = self.dos_total
-        
+        for i_atom in dos_projected.keys():
+            atom_key = self.labels[i_atom-1]
+            for l in range(len(self._M_dict[atom_key])):
+                for m in range(self._M_dict[atom_key][l]):
+                    if l == 0:
+                        ret[i_atom-1][l][m] = dos_projected[i_atom][l][m].T
+                    else:
+                        ret[i_atom-1][l][m+self._max_M_dict[atom_key][l-1]] = dos_projected[i_atom][l][m].T
+            ret[i_atom-1][-1][0] = self.dos_atom_projected[i_atom].T
         return ret
 
 
@@ -479,10 +548,75 @@ def handle_data(data):
     return list(map(handle_elem, data))
 
 
+def parse_projected_data(orbitals, species, keyname=''):
+    """Extract projected data from file
+
+    Args:
+        species (Union[Sequence[Any], Dict[Any, List[int]], Dict[Any, Dict[str, List[int]]]], optional): list of atomic species(index or atom index) or dict of atomic species(index or atom index) and its angular momentum list. Defaults to [].
+        keyname (str): the keyword that extracts the projected data. Allowed values: 'index', 'atom_index', 'species'
+    """
+
+    if isinstance(species, (list, tuple, np.ndarray)):
+        data = {}
+        elements = species
+        for elem in elements:
+            count = 0
+            data_temp = np.zeros_like(orbitals[0]["data"], dtype=float)
+            for orb in orbitals:
+                if orb[keyname] == elem:
+                    data_temp += orb["data"]
+                    count += 1
+            if count:
+                data[elem] = data_temp
+
+        return data, len(elements)
+
+    elif isinstance(species, dict):
+        data = defaultdict(dict)
+        elements = list(species.keys())
+        l = list(species.values())
+        totnum = 0
+        for i, elem in enumerate(elements):
+            if isinstance(l[i], dict):
+                for ang, mag in l[i].items():
+                    l_count = 0
+                    l_index = int(ang)
+                    l_data = {}
+                    for m_index in mag:
+                        m_count = 0
+                        data_temp = np.zeros_like(
+                            orbitals[0]["data"], dtype=float)
+                        for orb in orbitals:
+                            if orb[keyname] == elem and orb["l"] == l_index and orb["m"] == m_index:
+                                data_temp += orb["data"]
+                                m_count += 1
+                                l_count += 1
+                        if m_count:
+                            l_data[m_index] = data_temp
+                            totnum += 1
+                    if l_count:
+                        data[elem][l_index] = l_data
+
+            elif isinstance(l[i], list):
+                for l_index in l[i]:
+                    count = 0
+                    data_temp = np.zeros_like(
+                        orbitals[0]["data"], dtype=float)
+                    for orb in orbitals:
+                        if orb[keyname] == elem and orb["l"] == l_index:
+                            data_temp += orb["data"]
+                            count += 1
+                    if count:
+                        data[elem][l_index] = data_temp
+                        totnum += 1
+
+        return data, totnum
+
+
 if __name__ == '__main__':
     running_file = r'C:\Users\YY.Ji\Desktop\running_scf.log'
     pdos_file = r'C:\Users\YY.Ji\Desktop\PDOS'
-    pbands_file = ''
+    pbands_file = r'C:\Users\YY.Ji\Desktop\PBANDS_1'
     k_file = r'C:\Users\YY.Ji\Desktop\KPT'
     obj = ABACUSParser(pdos_file, pbands_file, k_file, running_file)
-    print(obj.max_M_list)
+    #print(obj.weights_projected)
