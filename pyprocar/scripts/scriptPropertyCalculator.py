@@ -307,7 +307,7 @@ class PropertyCalculator:
 
         elif self.code == "abacus":
             procarFile = io.abacus.ABACUSParser(pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', 
-                                    running_file='running_scf.log', dos_interpolation_factor=None)
+                                    scf_log='running_scf.log', nscf_log='running_nscf.log', dos_interpolation_factor=None)
             reciprocal_lattice = procarFile.reciprocal_lattice
             data = ProcarSelect(procarFile, deepCopy=True)
 

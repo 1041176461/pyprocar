@@ -17,11 +17,11 @@ BOHR_TO_A = physical_constants["atomic unit of length"][0] / \
     physical_constants["Angstrom star"][0]
 
 class ABACUSParser:
-    def __init__(self, pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', running_file='running_scf.log', dos_interpolation_factor=None):
+    def __init__(self, pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', scf_log='running_scf.log', nscf_log='running_nscf.log', dos_interpolation_factor=None):
 
         self.dos_interpolation_factor = dos_interpolation_factor
 
-        self.read(pdos_file, pband_file, k_file, running_file)
+        self.read(pdos_file, pband_file, k_file, scf_log, nscf_log)
 
         if self.nspin in [1, 4]:
             self.is_spin_polarized = False
@@ -56,7 +56,7 @@ class ABACUSParser:
 
 ## READ FILES
 
-    def read(self, pdos_file, pband_file, k_file, running_file):
+    def read(self, pdos_file, pband_file, k_file, scf_log, nscf_log):
         if isinstance(pband_file, str):
             pband_file = [pband_file]
         self.pband_file = []
@@ -65,10 +65,13 @@ class ABACUSParser:
                 self.pband_file.append(file)
         self.pdos_file = self.check_file(pdos_file)
         self.k_file = self.check_file(k_file)
-        self.running_file = self.check_file(running_file)
+        self.scf_log = self.check_file(scf_log)
+        self.nscf_log = self.check_file(nscf_log)
 
-        if self.running_file:
-            self._readABACUSout()
+        if self.scf_log:
+            self._readABACUSscfout()
+        if self.nscf_log:
+            self._readABACUSnscfout()
         if self.k_file:
             self._readKLINES()
         if self.pdos_file:
@@ -204,8 +207,8 @@ class ABACUSParser:
                         has_time_reversal=has_time_reversal,
                     )
 
-    def _readABACUSout(self):
-        """Read running_*.log file"""
+    def _readABACUSscfout(self):
+        """Read running_scf.log file"""
 
         re_float = r'[\d\.\-\+Ee]+'
 
@@ -225,17 +228,7 @@ class ABACUSParser:
             steps.insert(0, 0)
             return steps
 
-        def str_to_kpoints(val_in):
-            lines = re.search(
-                rf'KPOINTS\s*DIRECT_X\s*DIRECT_Y\s*DIRECT_Z\s*WEIGHT([\s\S]+?)DONE', val_in).group(1).strip().split('\n')
-            data = []
-            for line in lines:
-                data.append(line.strip().split()[1:5])
-            kpoints, weights, _ = np.split(
-                np.array(data, dtype=float), [3, 4], axis=1)
-            return kpoints, weights.flatten()
-
-        with open(self.running_file, 'r') as fd:
+        with open(self.scf_log, 'r') as fd:
             contents = fd.read()
 
         self.nspin = int(re.search(r'nspin\s*=\s*(\d+)', contents).group(1))
@@ -312,10 +305,26 @@ class ABACUSParser:
         self._max_M_dict = dict(zip(self.zetas.keys(), list(map(np.cumsum, _M_list))))
         self._max_M = np.max(list(map(np.sum, _M_list)))
 
+    def _readABACUSnscfout(self):
+        """Read running_nscf.log file"""
+
+        def str_to_kpoints(val_in):
+            lines = re.search(
+                rf'KPOINTS\s*DIRECT_X\s*DIRECT_Y\s*DIRECT_Z\s*WEIGHT([\s\S]+?)DONE', val_in).group(1).strip().split('\n')
+            data = []
+            for line in lines:
+                data.append(line.strip().split()[1:5])
+            kpoints, weights, _ = np.split(
+                np.array(data, dtype=float), [3, 4], axis=1)
+            return kpoints, weights.flatten()
+
+        with open(self.nscf_log, 'r') as fd:
+            contents = fd.read()
+
         # kpoints
         k_pattern = re.compile(r'minimum distributed K point number\s*=\s*\d+([\s\S]+?DONE : INIT K-POINTS Time)')
         sub_contents = k_pattern.search(contents).group(1)
-        self.kpoints, self.weigths = str_to_kpoints(sub_contents)
+        self.kpoints, self._kweights = str_to_kpoints(sub_contents)
 
 # STRUCTURE
 
