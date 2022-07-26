@@ -456,18 +456,18 @@ class ABACUSParser:
 
     def _get_dos_total(self):
 
-        dos_total = {'energies': self.dos_data['energies']}
+        dos = {'energies': self.dos_data['energies']}
         res = np.zeros_like(self.dos_data['state'][0]["data"], dtype=float)
         for orb in self.dos_data['state']:
             res = res + orb['data']
 
         if self.is_spin_polarized:
-            dos_total['Spin-up'] = res[:, 0]
-            dos_total['Spin-down'] = res[:, 1]
+            dos['Spin-up'] = res[:, 0]
+            dos['Spin-down'] = res[:, 1]
         else:
-            dos_total['Spin-up'] = res[:, 0]
+            dos['Spin-up'] = res[:, 0]
 
-        return dos_total, list(dos_total.keys())
+        return dos, list(dos.keys())
 
     def _get_dos_projected(self):
 
@@ -498,12 +498,12 @@ class ABACUSParser:
     @property
     def dos_total(self):
 
-        dos_total, labels = self._get_dos_total()
+        dos, labels = self._get_dos_total()
         total = []
         for ispin in self.dos_total:
             if ispin == 'energies':
                 continue
-            total.append(dos_total[ispin]) # (nspin, ndos)
+            total.append(dos[ispin]) # (nspin, ndos)
 
         return total
 
@@ -521,18 +521,18 @@ class ABACUSParser:
         pyprocar.core.dos object
         """
         
-        dos_projected, info = self._get_dos_projected()
-        if dos_projected is None:
+        dos, info = self._get_dos_projected()
+        if dos is None:
             return None
         ret = np.zeros((self.initial_structure.natoms, self._max_L+1, self._max_M, self._nsplit, len(self.dos_data['energies'])), dtype=float)
-        for i_atom in dos_projected.keys():
+        for i_atom in dos.keys():
             atom_key = self.labels[i_atom-1]
             for l in range(len(self._M_dict[atom_key])):
                 for m in range(self._M_dict[atom_key][l]):
                     if l == 0:
-                        ret[i_atom-1][l][m] = dos_projected[i_atom][l][m].T
+                        ret[i_atom-1][l][m] = dos[i_atom][l][m].T
                     else:
-                        ret[i_atom-1][l][m+self._max_M_dict[atom_key][l-1]] = dos_projected[i_atom][l][m].T
+                        ret[i_atom-1][l][m+self._max_M_dict[atom_key][l-1]] = dos[i_atom][l][m].T
             ret[i_atom-1][-1][0] = self.dos_atom_projected[i_atom].T
         return ret
 
