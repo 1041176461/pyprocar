@@ -373,6 +373,15 @@ def fermi3D(
         # else:
         #     e_fermi = fermi
 
+    elif code == "abacus":
+        parser = io.abacus.ABACUSParser(pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', 
+                                    running_file='running_scf.log', dos_interpolation_factor=None)
+        reciprocal_lattice = parser.reciprocal_lattice
+        if fermi is None:
+            e_fermi = parser.fermi
+        else:
+            e_fermi = fermi
+
     elif code == "lobster":
         parser = LobsterFermiParser()
         reciprocal_lattice = parser.reclat

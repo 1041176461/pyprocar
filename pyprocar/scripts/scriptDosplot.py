@@ -519,6 +519,18 @@ def parse(code: str='vasp',
         structure = parser.structure
         
         dos = parser.dos
+
+    elif code == "abacus":
+        parser = io.abacus.ABACUSParser(pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', 
+                                    running_file='running_scf.log', dos_interpolation_factor=None)
+        if fermi is None:
+            fermi = parser.fermi
+        
+        reciprocal_lattice = parser.reciprocal_lattice
+    
+        structure = parser.structure
+        
+        dos = parser.dos
         
     
     return dos,  structure, reciprocal_lattice

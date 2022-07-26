@@ -305,6 +305,14 @@ class PropertyCalculator:
             # else:
             #     e_fermi = fermi
 
+        elif self.code == "abacus":
+            procarFile = io.abacus.ABACUSParser(pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', 
+                                    running_file='running_scf.log', dos_interpolation_factor=None)
+            reciprocal_lattice = procarFile.reciprocal_lattice
+            data = ProcarSelect(procarFile, deepCopy=True)
+
+            e_fermi = procarFile.fermi
+
         return data, reciprocal_lattice, procarFile, e_fermi
 
     def __format_data(self, 

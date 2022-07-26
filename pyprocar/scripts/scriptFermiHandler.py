@@ -858,6 +858,16 @@ class FermiHandler:
             # else:
             #     e_fermi = fermi
 
+        elif self.code == "abacus":
+            parser = io.abacus.ABACUSParser(pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', 
+                                    running_file='running_scf.log', dos_interpolation_factor=None)
+            reciprocal_lattice = parser.reciprocal_lattice
+
+            e_fermi = parser.fermi
+
+            if self.apply_symmetry:
+                parser.ebs.ibz2fbz(parser.rotations)
+
         elif self.code == "lobster":
             procarFile = LobsterFermiParser()
             reciprocal_lattice = procarFile.reclat

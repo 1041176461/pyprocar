@@ -5,6 +5,7 @@ from ..io import ElkParser
 from ..io import ProcarParser
 from ..io import QEParser
 from ..io import LobsterParser
+from ..io import ABACUSParser
 from ..utilsprocar import UtilsProcar
 
 
@@ -51,6 +52,12 @@ def getFermi(procar, code, outcar):  # from ScriptsBandPlot made into method
             # lobster already shifts fermi so we set it to zero here.
             fermi = 0.0
 
+    elif code == 'abacus':
+        if fermi is None:
+            procarFile = ABACUSParser()
+            fermi = procarFile.fermi
+            print("Fermi energy   :  %s eV (from ABACUS output)" % str(fermi))
+
     return fermi
 
 
@@ -83,6 +90,9 @@ def bandgap(procar=None, outcar=None, code="vasp", fermi=None, repair=True):
 
     elif code == "lobsters":
         procarFile = LobsterParser()
+
+    elif code == "abacus":
+        procarFile = ABACUSParser()
 
     bands = np.array(procarFile.bands)
     subBands = np.subtract(bands, fermi)

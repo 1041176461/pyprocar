@@ -358,8 +358,7 @@ def parse(code:str='vasp',
         
         
     elif code == "qe":
-        if dirname is None:
-            dirname = "bands"
+
         parser = io.qe.QEParser(scfIn_filename = "scf.in", dirname = dirname, bandsIn_filename = "bands.in", 
                              pdosIn_filename = "pdos.in", kpdosIn_filename = "kpdos.in", atomic_proj_xml = "atomic_proj.xml", 
                              dos_interpolation_factor = None)
@@ -374,6 +373,20 @@ def parse(code:str='vasp',
 
         ebs = parser.ebs
         
+    elif code == "abacus":
+        if dirname is None:
+            dirname = "bands"
+        parser = io.abacus.ABACUSParser(pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', 
+                                    running_file='running_scf.log', dos_interpolation_factor=None)
+        if fermi is None:
+            fermi = parser.fermi
+        reciprocal_lattice = parser.reciprocal_lattice
+    
+        structure = parser.structure
         
+        kpoints = parser.kpoints
+        kpath = parser.kpath
+
+        ebs = parser.ebs
 
     return ebs, kpath, structure, reciprocal_lattice
