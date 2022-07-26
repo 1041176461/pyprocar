@@ -375,7 +375,7 @@ def fermi3D(
 
     elif code == "abacus":
         parser = io.abacus.ABACUSParser(pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', 
-                                    scf_log='running_scf.log', nscf_log='running_nscf.log', dos_interpolation_factor=None)
+                                    scf_log='running_scf.log', nscf_log='running_nscf.log', dos_interpolation_factor=1)
         reciprocal_lattice = parser.reciprocal_lattice
         if fermi is None:
             e_fermi = parser.fermi
