@@ -17,7 +17,7 @@ BOHR_TO_A = physical_constants["atomic unit of length"][0] / \
     physical_constants["Angstrom star"][0]
 
 class ABACUSParser:
-    def __init__(self, pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', scf_log='running_scf.log', nscf_log='running_nscf.log', dos_interpolation_factor=None):
+    def __init__(self, pdos_file='PDOS', pband_file='PBANDS_1', k_file='KLINES', scf_log='running_scf.log', nscf_log='running_nscf.log', dos_interpolation_factor=1):
 
         self.dos_interpolation_factor = dos_interpolation_factor
 
